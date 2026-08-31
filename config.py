@@ -1,4 +1,5 @@
 import os
+import random
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,22 +34,25 @@ class Config:
     password: str
     daily_steps: str
     sleep_hours: str
-    sleep_minutes: str
+    sleep_hours_min: str
+    sleep_hours_max: str
     login_url: str
     headless: bool
     selector_email: str
+    selector_continue: str
     selector_password: str
     selector_sign_in: str
     steps_page_url: str
+    stats_page_url: str
     sleep_page_url: str
     selector_steps_input: str
     selector_steps_save: str
-    selector_sleep_hours_input: str
-    selector_sleep_minutes_input: str
+    selector_sleep_input: str
     selector_sleep_save: str
     selector_steps_nav: str
     selector_sleep_nav: str
     screenshot_dir: Path
+    auth_file: Path
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -56,44 +60,68 @@ class Config:
             email=_require("PERSONIFY_EMAIL"),
             password=_require("PERSONIFY_PASSWORD"),
             daily_steps=_optional("DAILY_STEPS", "8000"),
-            sleep_hours=_optional("SLEEP_HOURS", "7"),
-            sleep_minutes=_optional("SLEEP_MINUTES", "30"),
-            login_url=_optional("PERSONIFY_LOGIN_URL", "https://login.personifyhealth.com"),
+            sleep_hours=_optional("SLEEP_HOURS", "7.5"),
+            sleep_hours_min=_optional("SLEEP_HOURS_MIN", "7"),
+            sleep_hours_max=_optional("SLEEP_HOURS_MAX", "8"),
+            login_url=_optional("PERSONIFY_LOGIN_URL", "https://app.personifyhealth.com"),
             headless=_bool("HEADLESS", default=True),
             selector_email=_optional(
                 "SELECTOR_EMAIL",
-                'input[name="username"], input[type="email"], #username',
+                "placeholder:Enter your email or username",
             ),
+            selector_continue=_optional("SELECTOR_CONTINUE", "role:button:Continue"),
             selector_password=_optional(
                 "SELECTOR_PASSWORD",
-                'input[name="password"], input[type="password"], #password',
+                "placeholder:Enter your password, label:Password *",
             ),
             selector_sign_in=_optional(
                 "SELECTOR_SIGN_IN",
-                'button[type="submit"], button:has-text("Sign In")',
+                "role:button:Sign In",
             ),
             steps_page_url=_optional("STEPS_PAGE_URL"),
+            stats_page_url=_optional(
+                "STATS_PAGE_URL",
+                "https://app.personifyhealth.com/#/stats-page",
+            ),
             sleep_page_url=_optional("SLEEP_PAGE_URL"),
-            selector_steps_input=_optional("SELECTOR_STEPS_INPUT"),
-            selector_steps_save=_optional("SELECTOR_STEPS_SAVE"),
-            selector_sleep_hours_input=_optional("SELECTOR_SLEEP_HOURS_INPUT"),
-            selector_sleep_minutes_input=_optional("SELECTOR_SLEEP_MINUTES_INPUT"),
-            selector_sleep_save=_optional("SELECTOR_SLEEP_SAVE"),
-            selector_steps_nav=_optional("SELECTOR_STEPS_NAV"),
-            selector_sleep_nav=_optional("SELECTOR_SLEEP_NAV"),
+            selector_steps_input=_optional(
+                "SELECTOR_STEPS_INPUT",
+                "placeholder:Enter number of steps",
+            ),
+            selector_steps_save=_optional("SELECTOR_STEPS_SAVE", "role:button:Save"),
+            selector_sleep_input=_optional(
+                "SELECTOR_SLEEP_INPUT",
+                "placeholder:Enter hours of sleep",
+            ),
+            selector_sleep_save=_optional("SELECTOR_SLEEP_SAVE", "role:button:Save"),
+            selector_steps_nav=_optional(
+                "SELECTOR_STEPS_NAV",
+                "label:Track Steps, role:link:Track Steps, text:Track Steps",
+            ),
+            selector_sleep_nav=_optional(
+                "SELECTOR_SLEEP_NAV",
+                "label:Track Sleep, role:link:Track Sleep",
+            ),
             screenshot_dir=Path(__file__).parent / "screenshots",
+            auth_file=Path(__file__).parent / _optional("AUTH_FILE", "auth.json"),
         )
 
-    def validate_selectors(self) -> None:
+    def validate_selectors(self, steps_only: bool = False, sleep_only: bool = False) -> None:
         missing = []
-        if not self.selector_steps_input:
-            missing.append("SELECTOR_STEPS_INPUT")
-        if not self.selector_steps_save:
-            missing.append("SELECTOR_STEPS_SAVE")
-        if not self.selector_sleep_hours_input and not self.selector_sleep_minutes_input:
-            missing.append("SELECTOR_SLEEP_HOURS_INPUT or SELECTOR_SLEEP_MINUTES_INPUT")
-        if not self.selector_sleep_save:
-            missing.append("SELECTOR_SLEEP_SAVE")
+        if not sleep_only:
+            if not self.selector_steps_nav:
+                missing.append("SELECTOR_STEPS_NAV")
+            if not self.selector_steps_input:
+                missing.append("SELECTOR_STEPS_INPUT")
+            if not self.selector_steps_save:
+                missing.append("SELECTOR_STEPS_SAVE")
+        if not steps_only:
+            if not self.selector_sleep_nav:
+                missing.append("SELECTOR_SLEEP_NAV")
+            if not self.selector_sleep_input:
+                missing.append("SELECTOR_SLEEP_INPUT")
+            if not self.selector_sleep_save:
+                missing.append("SELECTOR_SLEEP_SAVE")
 
         if missing:
             print(
@@ -102,3 +130,12 @@ class Config:
                 file=sys.stderr,
             )
             sys.exit(1)
+
+    def resolve_sleep_hours(self) -> str:
+        """Return sleep hours to log — random in [min, max] when both are set."""
+        if self.sleep_hours_min and self.sleep_hours_max:
+            low = float(self.sleep_hours_min)
+            high = float(self.sleep_hours_max)
+            value = random.uniform(low, high)
+            return f"{value:.1f}".rstrip("0").rstrip(".")
+        return self.sleep_hours

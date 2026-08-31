@@ -9,4 +9,5 @@ __pycache__/
 playwright-report/
 test-results/
 screenshots/
+auth.json
 *.log
