@@ -12,6 +12,8 @@ def locator_from_spec(page: Page, spec: str) -> Locator:
     Supported prefixes (match codegen output):
       placeholder:Enter your email or username  -> get_by_placeholder(...)
       label:Password *                          -> get_by_label(...)
+      aria-label:Enter hours of sleep           -> [aria-label="..."]
+      formcontrolname:hours                     -> [formcontrolname="hours"]
       role:button:Sign In                       -> get_by_role("button", name="Sign In")
       text:Submit                               -> get_by_text(...)
 
@@ -30,6 +32,14 @@ def locator_from_spec(page: Page, spec: str) -> Locator:
     if spec.startswith("label:"):
         return page.get_by_label(spec.removeprefix("label:"), exact=False)
 
+    if spec.startswith("aria-label:"):
+        value = spec.removeprefix("aria-label:")
+        return page.locator(f'[aria-label="{value}"]').first
+
+    if spec.startswith("formcontrolname:"):
+        value = spec.removeprefix("formcontrolname:")
+        return page.locator(f'[formcontrolname="{value}"]').first
+
     if spec.startswith("role:"):
         _, role, name = spec.split(":", 2)
         return page.get_by_role(role, name=name)
@@ -40,7 +50,7 @@ def locator_from_spec(page: Page, spec: str) -> Locator:
     return page.locator(spec).first
 
 
-def first_matching_locator(page: Page, selectors: str) -> Locator:
+def first_matching_locator(page: Page, selectors: str, *, timeout: int = 5_000) -> Locator:
     """Try comma-separated selector specs; return the first visible match."""
     parts = [part.strip() for part in selectors.split(",") if part.strip()]
     last_error: Exception | None = None
@@ -48,7 +58,7 @@ def first_matching_locator(page: Page, selectors: str) -> Locator:
     for part in parts:
         try:
             locator = locator_from_spec(page, part)
-            locator.wait_for(state="visible", timeout=5_000)
+            locator.wait_for(state="visible", timeout=timeout)
             return locator
         except Exception as exc:
             last_error = exc

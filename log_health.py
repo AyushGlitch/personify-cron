@@ -369,8 +369,12 @@ def submit_sleep_home(page: Page, config: Config, debug: bool) -> None:
         screenshot(page, config.screenshot_dir, "03-healthy-habits")
 
     try:
-        hours_input = first_matching_locator(page, config.selector_sleep_hours_input)
-        minutes_input = first_matching_locator(page, config.selector_sleep_minutes_input)
+        hours_input = first_matching_locator(
+            page, config.selector_sleep_hours_input, timeout=15_000
+        )
+        minutes_input = first_matching_locator(
+            page, config.selector_sleep_minutes_input, timeout=15_000
+        )
     except RuntimeError:
         print("Sleep fields not found — may already be logged for today. Skipping.")
         return

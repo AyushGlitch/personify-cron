@@ -113,11 +113,11 @@ class Config:
             ),
             selector_sleep_hours_input=_optional(
                 "SELECTOR_SLEEP_HOURS_INPUT",
-                "label!:Enter hours of sleep, label:Hours, placeholder:hours",
+                "#sleepHours, aria-label:Enter hours of sleep, formcontrolname:hours",
             ),
             selector_sleep_minutes_input=_optional(
                 "SELECTOR_SLEEP_MINUTES_INPUT",
-                "label!:Enter minutes of sleep, label:Minutes, placeholder:minutes",
+                "#sleepMinutes, aria-label:Enter minutes of sleep, formcontrolname:minutes",
             ),
             selector_track_sleep=_optional(
                 "SELECTOR_TRACK_SLEEP",
@@ -143,7 +143,7 @@ class Config:
             selector_steps_save=_optional("SELECTOR_STEPS_SAVE", "role:button:Save"),
             selector_sleep_input=_optional(
                 "SELECTOR_SLEEP_INPUT",
-                "placeholder:Enter hours of sleep",
+                "#sleepHours, aria-label:Enter hours of sleep, formcontrolname:hours",
             ),
             selector_sleep_save=_optional("SELECTOR_SLEEP_SAVE", "role:button:Save"),
             selector_steps_nav=_optional(
