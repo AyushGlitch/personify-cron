@@ -24,6 +24,9 @@ def locator_from_spec(page: Page, spec: str) -> Locator:
     if spec.startswith("placeholder:"):
         return page.get_by_placeholder(spec.removeprefix("placeholder:"))
 
+    if spec.startswith("label!:"):
+        return page.get_by_label(spec.removeprefix("label!:"), exact=True)
+
     if spec.startswith("label:"):
         return page.get_by_label(spec.removeprefix("label:"), exact=False)
 

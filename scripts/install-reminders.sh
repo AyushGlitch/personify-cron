@@ -40,11 +40,9 @@ cat > "$PLIST" <<EOF
       <key>Hour</key><integer>15</integer>
       <key>Minute</key><integer>30</integer>
     </dict>
-    <dict>
-      <key>Hour</key><integer>15</integer>
-      <key>Minute</key><integer>45</integer>
-    </dict>
   </array>
+  <key>RunAtLoad</key>
+  <false/>
   <key>StandardOutPath</key>
   <string>/tmp/personify-reminder.log</string>
   <key>StandardErrorPath</key>

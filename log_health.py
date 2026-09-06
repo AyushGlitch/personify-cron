@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
-"""Log daily steps and sleep to Personify Health."""
+"""Log daily steps, sleep, mood, and daily cards to Personify Health."""
 
 from __future__ import annotations
 
 import argparse
+import re
 import sys
+from dataclasses import replace
 from pathlib import Path
 
-from playwright.sync_api import Page, TimeoutError as PlaywrightTimeout, sync_playwright
+from playwright.sync_api import Locator, Page, TimeoutError as PlaywrightTimeout, expect, sync_playwright
 
 from config import Config
 from locators import first_matching_locator, locator_from_spec
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Log steps and sleep to Personify Health")
+    parser = argparse.ArgumentParser(description="Log health data to Personify Health")
     parser.add_argument(
         "--headed",
         action="store_true",
@@ -36,14 +38,30 @@ def parse_args() -> argparse.Namespace:
         help="You complete login + 2FA in the browser, then press Enter to continue",
     )
     parser.add_argument(
+        "--flow",
+        choices=("home", "stats"),
+        default=None,
+        help="home = Healthy Habits on dashboard (default); stats = legacy stats-page flow",
+    )
+    parser.add_argument(
         "--steps-only",
         action="store_true",
-        help="Log steps only (skip sleep)",
+        help="Log steps only",
     )
     parser.add_argument(
         "--sleep-only",
         action="store_true",
-        help="Log sleep only (skip steps — useful when steps already logged today)",
+        help="Log sleep only",
+    )
+    parser.add_argument(
+        "--skip-mood",
+        action="store_true",
+        help="Skip mood tracking (home flow)",
+    )
+    parser.add_argument(
+        "--skip-cards",
+        action="store_true",
+        help="Skip daily cards (home flow)",
     )
     parser.add_argument(
         "--save-auth",
@@ -117,7 +135,15 @@ def wait_for_app(page: Page, config: Config) -> None:
 
     page.wait_for_url("**/app.personifyhealth.com/**", timeout=60_000)
 
-    for spec in ("role:heading:Stats", "text:Stats", "role:link:Home", "text:Steps"):
+    hints = (
+        "role:heading:Stats",
+        "text:Stats",
+        "role:link:Home",
+        "text:Steps",
+        "label:Healthy Habits",
+        "text:Healthy Habits",
+    )
+    for spec in hints:
         try:
             first_matching_locator(page, spec)
             print(f"Logged in. ({_describe_page(page)})")
@@ -134,6 +160,14 @@ def wait_for_app(page: Page, config: Config) -> None:
     )
 
 
+def ensure_home_page(page: Page, config: Config) -> None:
+    if "#/home" not in page.url:
+        print(f"Navigating to home: {config.home_page_url}")
+        page.goto(config.home_page_url, wait_until="domcontentloaded")
+        page.wait_for_timeout(2000)
+    print(f"On home page. ({_describe_page(page)})")
+
+
 def ensure_stats_page(page: Page, config: Config) -> None:
     stats_url = config.stats_page_url
     if "#/stats-page" not in page.url:
@@ -143,6 +177,18 @@ def ensure_stats_page(page: Page, config: Config) -> None:
 
     first_matching_locator(page, "role:heading:Stats, text:Stats")
     print(f"On stats page. ({_describe_page(page)})")
+
+
+def open_healthy_habits(page: Page, config: Config) -> None:
+    ensure_home_page(page, config)
+    try:
+        habits = first_matching_locator(page, config.selector_healthy_habits)
+        habits.scroll_into_view_if_needed()
+        print(f"Opening Healthy Habits: {config.selector_healthy_habits}")
+        habits.click()
+        page.wait_for_timeout(1500)
+    except RuntimeError:
+        print("Healthy Habits section not found — may already be expanded.")
 
 
 def open_tracker(page: Page, nav_selectors: str, metric: str) -> bool:
@@ -163,14 +209,6 @@ def open_tracker(page: Page, nav_selectors: str, metric: str) -> bool:
         f"Track {metric} link not found — {metric.lower()} may already be logged for today. Skipping."
     )
     return False
-
-
-def open_steps_tracker(page: Page, config: Config) -> bool:
-    return open_tracker(page, config.selector_steps_nav, "Steps")
-
-
-def open_sleep_tracker(page: Page, config: Config) -> bool:
-    return open_tracker(page, config.selector_sleep_nav, "Sleep")
 
 
 def _session_expired_message(config: Config) -> str:
@@ -195,7 +233,7 @@ def session_login(page: Page, config: Config, debug: bool) -> None:
         )
 
     print(f"Using saved session: {config.auth_file}")
-    page.goto(config.stats_page_url, wait_until="domcontentloaded")
+    page.goto(config.post_login_url(), wait_until="domcontentloaded")
     page.wait_for_timeout(2000)
 
     if debug:
@@ -233,7 +271,7 @@ def complete_manual_login(page: Page, config: Config) -> None:
     print()
     print("=" * 60)
     print("  Complete login in the browser (including 2FA if shown).")
-    print("  Wait until you see the Stats page (or Home), then press Enter.")
+    print("  Wait until you see the Home or Stats page, then press Enter.")
     print("  Tip: add --save-auth to reuse this session later.")
     print("=" * 60)
     print()
@@ -244,7 +282,6 @@ def complete_manual_login(page: Page, config: Config) -> None:
 def login(page: Page, config: Config, debug: bool) -> None:
     print(f"Opening login page: {config.login_url}")
     page.goto(config.login_url, wait_until="domcontentloaded")
-    # app.personifyhealth.com redirects to Keycloak OIDC login with fresh state/nonce
     page.wait_for_load_state("networkidle", timeout=30_000)
     page.wait_for_timeout(1500)
 
@@ -277,7 +314,7 @@ def login(page: Page, config: Config, debug: bool) -> None:
             screenshot(page, config.screenshot_dir, "02-sso-redirect")
         raise RuntimeError(
             "Redirected to employer SSO. Direct login automation is not supported. "
-            "Use device sync (Fitbit/Apple Health) or configure session cookies manually."
+            "Use --manual-login --save-auth instead."
         )
 
     if debug:
@@ -301,41 +338,233 @@ def _looks_like_sso_redirect(page: Page) -> bool:
     return any(hint in url for hint in sso_hints)
 
 
-def submit_steps(page: Page, config: Config, debug: bool) -> None:
+# --- Home flow (primary) ---
+
+
+def _fill_input(locator: Locator, value: str) -> None:
+    """Fill a React-controlled input and ensure the value sticks."""
+    locator.scroll_into_view_if_needed()
+    locator.click()
+    locator.fill("")
+    locator.fill(value)
+
+    try:
+        current = locator.input_value(timeout=2_000)
+    except Exception:
+        current = ""
+
+    if current != value:
+        locator.fill("")
+        locator.press_sequentially(value, delay=40)
+
+    locator.dispatch_event("input")
+    locator.dispatch_event("change")
+    locator.dispatch_event("blur")
+
+
+def submit_sleep_home(page: Page, config: Config, debug: bool) -> None:
+    open_healthy_habits(page, config)
+
+    if debug:
+        screenshot(page, config.screenshot_dir, "03-healthy-habits")
+
+    try:
+        hours_input = first_matching_locator(page, config.selector_sleep_hours_input)
+        minutes_input = first_matching_locator(page, config.selector_sleep_minutes_input)
+    except RuntimeError:
+        print("Sleep fields not found — may already be logged for today. Skipping.")
+        return
+
+    sleep_hours, sleep_minutes = config.resolve_sleep_hm()
+    print(f"Logging sleep: {sleep_hours}h {sleep_minutes}m")
+
+    _fill_input(hours_input, sleep_hours)
+    page.wait_for_timeout(300)
+    _fill_input(minutes_input, sleep_minutes)
+    page.wait_for_timeout(500)
+
+    if debug:
+        screenshot(page, config.screenshot_dir, "04-sleep-filled")
+
+    track = first_matching_locator(page, config.selector_track_sleep)
+    track.scroll_into_view_if_needed()
+    try:
+        expect(track).to_be_enabled(timeout=10_000)
+    except AssertionError:
+        print("Sleep track button still disabled — trying Enter on minutes field.")
+        minutes_input.press("Enter")
+        page.wait_for_timeout(1500)
+
+    if track.is_visible():
+        track.click()
+    page.wait_for_timeout(2000)
+
+    if debug:
+        screenshot(page, config.screenshot_dir, "05-sleep-saved")
+
+    print(f"Submitted sleep: {sleep_hours}h {sleep_minutes}m")
+
+
+def submit_steps_home(page: Page, config: Config, debug: bool) -> None:
+    open_healthy_habits(page, config)
+
+    try:
+        steps_input = first_matching_locator(page, config.selector_steps_input_home)
+    except RuntimeError:
+        print("Steps field not found — may already be logged for today. Skipping.")
+        return
+
+    steps = config.resolve_steps()
+    steps_input.click()
+    steps_input.fill(steps)
+
+    if debug:
+        screenshot(page, config.screenshot_dir, "06-steps-filled")
+
+    first_matching_locator(page, config.selector_track_steps).click()
+    page.wait_for_timeout(2000)
+
+    if debug:
+        screenshot(page, config.screenshot_dir, "07-steps-saved")
+
+    print(f"Submitted steps: {steps}")
+
+
+def submit_mood(page: Page, config: Config, debug: bool) -> None:
+    open_healthy_habits(page, config)
+
+    mood = config.resolve_mood()
+    spec = f"role:button:{mood}"
+
+    try:
+        mood_btn = first_matching_locator(page, spec)
+        mood_btn.scroll_into_view_if_needed()
+        mood_btn.click()
+        page.wait_for_timeout(1500)
+        print(f"Submitted mood: {mood}")
+        if debug:
+            screenshot(page, config.screenshot_dir, "08-mood-saved")
+    except RuntimeError:
+        print(f"Mood button '{mood}' not found — may already be logged for today. Skipping.")
+
+
+def _try_click_daily_card_ok(page: Page, config: Config) -> bool:
+    for spec in (part.strip() for part in config.selector_daily_card_ok.split(",") if part.strip()):
+        try:
+            if spec.startswith("#") or spec.startswith("."):
+                locator = page.locator(spec).first
+            else:
+                locator = locator_from_spec(page, spec)
+            locator.wait_for(state="visible", timeout=2_000)
+            locator.scroll_into_view_if_needed()
+            locator.click()
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def _try_next_daily_card(page: Page) -> bool:
+    try:
+        next_btn = page.get_by_label(re.compile(r"go to next card", re.I))
+        next_btn.first.wait_for(state="visible", timeout=2_000)
+        next_btn.first.scroll_into_view_if_needed()
+        next_btn.first.click()
+        return True
+    except Exception:
+        return False
+
+
+def submit_daily_cards(page: Page, config: Config, debug: bool) -> None:
+    print("Checking daily cards...")
+    ensure_home_page(page, config)
+
+    if debug:
+        screenshot(page, config.screenshot_dir, "09-daily-cards-start")
+
+    any_action = False
+    for _ in range(config.daily_cards_max_iterations):
+        clicked_ok = _try_click_daily_card_ok(page, config)
+        if clicked_ok:
+            any_action = True
+            print("Clicked daily card OK")
+            page.wait_for_timeout(1500)
+            if debug:
+                screenshot(page, config.screenshot_dir, "10-daily-card-ok")
+
+        if not _try_next_daily_card(page):
+            if not clicked_ok:
+                break
+            page.wait_for_timeout(1000)
+            continue
+
+        page.wait_for_timeout(1000)
+
+    if any_action:
+        print("Daily cards completed.")
+    else:
+        print("No daily card OK button available — skipping.")
+
+
+def run_home_flow(
+    page: Page,
+    config: Config,
+    debug: bool,
+    *,
+    steps_only: bool,
+    sleep_only: bool,
+    skip_mood: bool,
+    skip_cards: bool,
+) -> None:
+    ensure_home_page(page, config)
+
+    if not sleep_only:
+        submit_sleep_home(page, config, debug)
+    if not steps_only:
+        submit_steps_home(page, config, debug)
+    if not skip_mood and not steps_only and not sleep_only:
+        submit_mood(page, config, debug)
+    if not skip_cards and not steps_only and not sleep_only:
+        submit_daily_cards(page, config, debug)
+
+
+# --- Stats flow (secondary / legacy) ---
+
+
+def submit_steps_stats(page: Page, config: Config, debug: bool) -> None:
     ensure_stats_page(page, config)
 
     if debug:
         screenshot(page, config.screenshot_dir, "03-stats-page")
 
-    if not open_steps_tracker(page, config):
+    if not open_tracker(page, config.selector_steps_nav, "Steps"):
         return
 
     if debug:
         screenshot(page, config.screenshot_dir, "03-steps-modal")
 
+    steps = config.resolve_steps()
     steps_input = locator_from_spec(page, config.selector_steps_input)
     steps_input.click()
-    steps_input.fill(config.daily_steps)
+    steps_input.fill(steps)
 
     locator_from_spec(page, config.selector_steps_save).click()
     page.wait_for_timeout(2000)
-
-    # Wait for modal to close before sleep entry
     steps_input.wait_for(state="hidden", timeout=10_000)
 
     if debug:
         screenshot(page, config.screenshot_dir, "04-steps-saved")
 
-    print(f"Submitted steps: {config.daily_steps}")
+    print(f"Submitted steps: {steps}")
 
 
-def submit_sleep(page: Page, config: Config, debug: bool) -> None:
+def submit_sleep_stats(page: Page, config: Config, debug: bool) -> None:
     ensure_stats_page(page, config)
 
     if debug:
         screenshot(page, config.screenshot_dir, "05-stats-page")
 
-    if not open_sleep_tracker(page, config):
+    if not open_tracker(page, config.selector_sleep_nav, "Sleep"):
         return
 
     if debug:
@@ -348,13 +577,26 @@ def submit_sleep(page: Page, config: Config, debug: bool) -> None:
 
     locator_from_spec(page, config.selector_sleep_save).click()
     page.wait_for_timeout(2000)
-
     sleep_input.wait_for(state="hidden", timeout=10_000)
 
     if debug:
         screenshot(page, config.screenshot_dir, "06-sleep-saved")
 
     print(f"Submitted sleep: {sleep_hours} hours")
+
+
+def run_stats_flow(
+    page: Page,
+    config: Config,
+    debug: bool,
+    *,
+    steps_only: bool,
+    sleep_only: bool,
+) -> None:
+    if not sleep_only:
+        submit_steps_stats(page, config, debug)
+    if not steps_only:
+        submit_sleep_stats(page, config, debug)
 
 
 def run(
@@ -364,6 +606,8 @@ def run(
     skip_validation: bool,
     steps_only: bool,
     sleep_only: bool,
+    skip_mood: bool,
+    skip_cards: bool,
     manual_login: bool,
     save_auth_flag: bool,
     use_auth: bool,
@@ -371,8 +615,16 @@ def run(
     if steps_only and sleep_only:
         raise ValueError("Use only one of --steps-only or --sleep-only")
 
+    flow_name = "home" if config.is_home_flow() else "stats"
+    print(f"Using {flow_name} flow")
+
     if not skip_validation:
-        config.validate_selectors(steps_only=steps_only, sleep_only=sleep_only)
+        config.validate_selectors(
+            steps_only=steps_only,
+            sleep_only=sleep_only,
+            skip_mood=skip_mood,
+            skip_cards=skip_cards,
+        )
 
     headless = config.headless and not headed
 
@@ -399,10 +651,24 @@ def run(
                 print("Login smoke test completed.")
                 return
 
-            if not sleep_only:
-                submit_steps(page, config, debug)
-            if not steps_only:
-                submit_sleep(page, config, debug)
+            if config.is_home_flow():
+                run_home_flow(
+                    page,
+                    config,
+                    debug,
+                    steps_only=steps_only,
+                    sleep_only=sleep_only,
+                    skip_mood=skip_mood,
+                    skip_cards=skip_cards,
+                )
+            else:
+                run_stats_flow(
+                    page,
+                    config,
+                    debug,
+                    steps_only=steps_only,
+                    sleep_only=sleep_only,
+                )
             print("Done.")
         except Exception:
             config.screenshot_dir.mkdir(parents=True, exist_ok=True)
@@ -418,6 +684,8 @@ def run(
 def main() -> None:
     args = parse_args()
     config = Config.from_env()
+    if args.flow:
+        config = replace(config, flow=args.flow)
 
     headed = args.headed or args.debug
 
@@ -429,6 +697,8 @@ def main() -> None:
             skip_validation=args.skip_validation,
             steps_only=args.steps_only,
             sleep_only=args.sleep_only,
+            skip_mood=args.skip_mood,
+            skip_cards=args.skip_cards,
             manual_login=args.manual_login,
             save_auth_flag=args.save_auth,
             use_auth=args.use_auth,

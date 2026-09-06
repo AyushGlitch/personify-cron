@@ -10,6 +10,7 @@ Log steps and sleep on Personify Health locally.
 source .venv/bin/activate
 python log_health.py --headed --manual-login --save-auth   # once (2FA)
 python log_health.py --use-auth --headed                   # daily runs
+python log_health.py --headed
 ```
 
 ## Reminders
