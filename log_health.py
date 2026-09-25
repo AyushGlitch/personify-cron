@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Log daily steps, sleep, mood, and daily cards to Personify Health."""
+"""Log sleep, steps, mood, and healthy habits to Personify Health (daily cards manual)."""
 
 from __future__ import annotations
 
 import argparse
-import re
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -61,7 +60,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--skip-cards",
         action="store_true",
-        help="Skip daily cards (home flow)",
+        help="Skip daily-cards pause — do not wait for manual OK (home flow)",
+    )
+    parser.add_argument(
+        "--skip-habits",
+        action="store_true",
+        help="Skip habit check-ins + activity converter (home flow)",
     )
     parser.add_argument(
         "--save-auth",
@@ -181,6 +185,11 @@ def ensure_stats_page(page: Page, config: Config) -> None:
 
 def open_healthy_habits(page: Page, config: Config) -> None:
     ensure_home_page(page, config)
+
+    if _healthy_habits_already_open(page, config):
+        print("Healthy Habits already open.")
+        return
+
     try:
         habits = first_matching_locator(page, config.selector_healthy_habits)
         habits.scroll_into_view_if_needed()
@@ -189,6 +198,33 @@ def open_healthy_habits(page: Page, config: Config) -> None:
         page.wait_for_timeout(1500)
     except RuntimeError:
         print("Healthy Habits section not found — may already be expanded.")
+
+
+def _healthy_habits_already_open(page: Page, config: Config) -> bool:
+    """True if Healthy Habits content is visible (avoid toggling the section closed)."""
+    probes = (
+        config.selector_sleep_hours_input,
+        config.selector_steps_input_home,
+        config.selector_track_sleep,
+        config.selector_track_steps,
+        config.selector_habit_activity_combobox,
+    )
+    for selectors in probes:
+        for spec in (part.strip() for part in selectors.split(",") if part.strip()):
+            try:
+                locator_from_spec(page, spec).wait_for(state="visible", timeout=1_000)
+                return True
+            except Exception:
+                continue
+    if config.habit_answers:
+        try:
+            page.get_by_text(config.habit_answers[0], exact=False).first.wait_for(
+                state="visible", timeout=1_000
+            )
+            return True
+        except Exception:
+            pass
+    return False
 
 
 def open_tracker(page: Page, nav_selectors: str, metric: str) -> bool:
@@ -452,62 +488,122 @@ def submit_mood(page: Page, config: Config, debug: bool) -> None:
         print(f"Mood button '{mood}' not found — may already be logged for today. Skipping.")
 
 
-def _try_click_daily_card_ok(page: Page, config: Config) -> bool:
-    for spec in (part.strip() for part in config.selector_daily_card_ok.split(",") if part.strip()):
-        try:
-            if spec.startswith("#") or spec.startswith("."):
-                locator = page.locator(spec).first
-            else:
-                locator = locator_from_spec(page, spec)
-            locator.wait_for(state="visible", timeout=2_000)
-            locator.scroll_into_view_if_needed()
-            locator.click()
-            return True
-        except Exception:
-            continue
-    return False
-
-
-def _try_next_daily_card(page: Page) -> bool:
-    try:
-        next_btn = page.get_by_label(re.compile(r"go to next card", re.I))
-        next_btn.first.wait_for(state="visible", timeout=2_000)
-        next_btn.first.scroll_into_view_if_needed()
-        next_btn.first.click()
-        return True
-    except Exception:
-        return False
-
-
-def submit_daily_cards(page: Page, config: Config, debug: bool) -> None:
-    print("Checking daily cards...")
+def pause_for_daily_cards(page: Page, config: Config, debug: bool) -> None:
+    """Pause so you can OK daily cards manually; Resume in Playwright Inspector."""
     ensure_home_page(page, config)
 
     if debug:
-        screenshot(page, config.screenshot_dir, "09-daily-cards-start")
+        screenshot(page, config.screenshot_dir, "09-daily-cards-pause")
 
-    any_action = False
-    for _ in range(config.daily_cards_max_iterations):
-        clicked_ok = _try_click_daily_card_ok(page, config)
-        if clicked_ok:
-            any_action = True
-            print("Clicked daily card OK")
-            page.wait_for_timeout(1500)
-            if debug:
-                screenshot(page, config.screenshot_dir, "10-daily-card-ok")
+    print()
+    print("=" * 60)
+    print("  Complete Daily Cards (OK) in the browser.")
+    print("  Browser stays interactive — cards are not blocked.")
+    print("  When finished, click Resume in the Playwright Inspector.")
+    print("=" * 60)
+    print()
+    page.pause()
+    print("Resumed — continuing with Healthy Habits...")
 
-        if not _try_next_daily_card(page):
-            if not clicked_ok:
-                break
-            page.wait_for_timeout(1000)
-            continue
 
-        page.wait_for_timeout(1000)
+def _answer_habit_question(page: Page, question: str, answer: str) -> bool:
+    """Click Yes/No on one habit card (left action buttons, not week-history pills)."""
+    try:
+        question_el = page.get_by_text(question, exact=True).first
+        question_el.wait_for(state="visible", timeout=5_000)
+        question_el.scroll_into_view_if_needed()
 
-    if any_action:
-        print("Daily cards completed.")
-    else:
-        print("No daily card OK button available — skipping.")
+        # Each card: title → question → Yes/No → Start Challenge | history pills.
+        # Scope to the card that has this question + Start Challenge (left panel marker),
+        # then take the first Yes/No — that is today's action button, not history.
+        card = question_el.locator(
+            "xpath=ancestor::*[.//*[contains(normalize-space(),'Start Challenge')]][1]"
+        )
+        if card.count() > 0:
+            btn = card.get_by_role("button", name=answer, exact=True).first
+        else:
+            btn = question_el.locator(
+                f'xpath=following::button[normalize-space()="{answer}"][1]'
+            )
+
+        btn.wait_for(state="visible", timeout=3_000)
+        btn.scroll_into_view_if_needed()
+        btn.click()
+        page.wait_for_timeout(800)
+        print(f"Healthy Habits: {question} → {answer}")
+        return True
+    except Exception:
+        print(f"Healthy Habits skipped (not found): {question}")
+        return False
+
+
+def submit_habit_activity(page: Page, config: Config, debug: bool) -> None:
+    """Log walking (or other) activity via the steps converter on Healthy Habits."""
+    try:
+        combobox = first_matching_locator(
+            page, config.selector_habit_activity_combobox, timeout=5_000
+        )
+    except RuntimeError:
+        print("Activity converter not found — may already be logged. Skipping.")
+        return
+
+    combobox.scroll_into_view_if_needed()
+    combobox.click()
+    page.wait_for_timeout(500)
+
+    try:
+        option = page.get_by_text(config.habit_activity, exact=True)
+        option.first.wait_for(state="visible", timeout=5_000)
+        option.first.click()
+    except Exception:
+        print(f"Activity option not found: {config.habit_activity!r}. Skipping converter.")
+        return
+
+    km = first_matching_locator(page, config.selector_habit_activity_km)
+    minutes = first_matching_locator(page, config.selector_habit_activity_minutes)
+    km_value = config.resolve_habit_activity_km()
+    minutes_value = config.resolve_habit_activity_minutes()
+    _fill_input(km, km_value)
+    page.wait_for_timeout(300)
+    _fill_input(minutes, minutes_value)
+    page.wait_for_timeout(300)
+
+    if debug:
+        screenshot(page, config.screenshot_dir, "11-habit-activity-filled")
+
+    first_matching_locator(page, config.selector_habit_activity_submit).click()
+    page.wait_for_timeout(1500)
+
+    if debug:
+        screenshot(page, config.screenshot_dir, "12-habit-activity-saved")
+
+    print(
+        f"Submitted activity: {config.habit_activity} "
+        f"({km_value} km, {minutes_value} min)"
+    )
+
+
+def submit_habit_checkins(page: Page, config: Config, debug: bool) -> None:
+    """Answer Yes/No habit questions + activity on the Healthy Habits page (not daily cards)."""
+    print("Logging Healthy Habits Yes/No check-ins...")
+    open_healthy_habits(page, config)
+
+    if debug:
+        screenshot(page, config.screenshot_dir, "10-habits-start")
+
+    for question in config.habit_answers:
+        answer = config.resolve_habit_answer()
+        _answer_habit_question(page, question, answer)
+
+    submit_habit_activity(page, config, debug)
+
+    for question, answer in config.habit_post_activity_answers:
+        _answer_habit_question(page, question, answer)
+
+    if debug:
+        screenshot(page, config.screenshot_dir, "13-habits-done")
+
+    print("Healthy Habits check-ins completed.")
 
 
 def run_home_flow(
@@ -519,17 +615,23 @@ def run_home_flow(
     sleep_only: bool,
     skip_mood: bool,
     skip_cards: bool,
+    skip_habits: bool,
 ) -> None:
     ensure_home_page(page, config)
 
-    if not sleep_only:
-        submit_sleep_home(page, config, debug)
+    full_run = not steps_only and not sleep_only
+
+    # Daily cards pause disabled for now — re-enable when ready
+    # if not skip_cards and full_run:
+    #     pause_for_daily_cards(page, config, debug)
     if not steps_only:
+        submit_sleep_home(page, config, debug)
+    if not sleep_only:
         submit_steps_home(page, config, debug)
-    if not skip_mood and not steps_only and not sleep_only:
+    if not skip_mood and full_run:
         submit_mood(page, config, debug)
-    if not skip_cards and not steps_only and not sleep_only:
-        submit_daily_cards(page, config, debug)
+    if not skip_habits and full_run:
+        submit_habit_checkins(page, config, debug)
 
 
 # --- Stats flow (secondary / legacy) ---
@@ -612,6 +714,7 @@ def run(
     sleep_only: bool,
     skip_mood: bool,
     skip_cards: bool,
+    skip_habits: bool,
     manual_login: bool,
     save_auth_flag: bool,
     use_auth: bool,
@@ -628,7 +731,20 @@ def run(
             sleep_only=sleep_only,
             skip_mood=skip_mood,
             skip_cards=skip_cards,
+            skip_habits=skip_habits,
         )
+
+    # page.pause() for daily cards needs a visible browser + Inspector
+    # (disabled while daily-cards pause is commented out in run_home_flow)
+    # needs_cards_pause = (
+    #     config.is_home_flow()
+    #     and not skip_cards
+    #     and not steps_only
+    #     and not sleep_only
+    # )
+    # if needs_cards_pause and not headed:
+    #     print("Daily cards pause requires a visible browser — enabling headed mode.")
+    #     headed = True
 
     headless = config.headless and not headed
 
@@ -664,6 +780,7 @@ def run(
                     sleep_only=sleep_only,
                     skip_mood=skip_mood,
                     skip_cards=skip_cards,
+                    skip_habits=skip_habits,
                 )
             else:
                 run_stats_flow(
@@ -703,6 +820,7 @@ def main() -> None:
             sleep_only=args.sleep_only,
             skip_mood=args.skip_mood,
             skip_cards=args.skip_cards,
+            skip_habits=args.skip_habits,
             manual_login=args.manual_login,
             save_auth_flag=args.save_auth,
             use_auth=args.use_auth,

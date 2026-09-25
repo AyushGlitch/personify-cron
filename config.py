@@ -56,6 +56,20 @@ class Config:
     selector_track_steps: str
     selector_daily_card_ok: str
     daily_cards_max_iterations: int
+    habit_answers: tuple[str, ...]
+    habit_yes_probability: float
+    habit_post_activity_answers: tuple[tuple[str, str], ...]
+    habit_activity: str
+    habit_activity_km: str
+    habit_activity_km_min: str
+    habit_activity_km_max: str
+    habit_activity_minutes: str
+    habit_activity_minutes_min: str
+    habit_activity_minutes_max: str
+    selector_habit_activity_combobox: str
+    selector_habit_activity_km: str
+    selector_habit_activity_minutes: str
+    selector_habit_activity_submit: str
     selector_steps_input: str
     selector_steps_save: str
     selector_sleep_input: str
@@ -109,7 +123,7 @@ class Config:
             ),
             selector_healthy_habits=_optional(
                 "SELECTOR_HEALTHY_HABITS",
-                "label:Healthy Habits",
+                "label:Healthy Habits, role:link:Healthy Habits, text:Healthy Habits",
             ),
             selector_sleep_hours_input=_optional(
                 "SELECTOR_SLEEP_HOURS_INPUT",
@@ -136,6 +150,44 @@ class Config:
                 "#daily-card-actions, role:button:OK",
             ),
             daily_cards_max_iterations=int(_optional("DAILY_CARDS_MAX_ITERATIONS", "8")),
+            habit_answers=(
+                "Did you keep food and snacks nearby today?",
+                "Did you take a meal break today?",
+                "Did you plan meals or snacks in advance today?",
+                "Did you leave bed if you lay awake for 15 minutes?",
+                "Did you take time to relax your mind before bed?",
+                "Did you take the stairs today?",
+            ),
+            habit_yes_probability=float(_optional("HABIT_YES_PROBABILITY", "0.8")),
+            habit_post_activity_answers=(
+                ("Did you start your day with a balanced meal?", "No"),
+            ),
+            habit_activity=_optional(
+                "HABIT_ACTIVITY",
+                "Walking 3 mph (Moderate Pace)",
+            ),
+            habit_activity_km=_optional("HABIT_ACTIVITY_KM", ""),
+            habit_activity_km_min=_optional("HABIT_ACTIVITY_KM_MIN", "3"),
+            habit_activity_km_max=_optional("HABIT_ACTIVITY_KM_MAX", "4.5"),
+            habit_activity_minutes=_optional("HABIT_ACTIVITY_MINUTES", ""),
+            habit_activity_minutes_min=_optional("HABIT_ACTIVITY_MINUTES_MIN", "45"),
+            habit_activity_minutes_max=_optional("HABIT_ACTIVITY_MINUTES_MAX", "59"),
+            selector_habit_activity_combobox=_optional(
+                "SELECTOR_HABIT_ACTIVITY_COMBOBOX",
+                "role:combobox:Select an activity or start",
+            ),
+            selector_habit_activity_km=_optional(
+                "SELECTOR_HABIT_ACTIVITY_KM",
+                "role:spinbutton:Kilometres",
+            ),
+            selector_habit_activity_minutes=_optional(
+                "SELECTOR_HABIT_ACTIVITY_MINUTES",
+                "role:spinbutton:Minutes",
+            ),
+            selector_habit_activity_submit=_optional(
+                "SELECTOR_HABIT_ACTIVITY_SUBMIT",
+                "#steps-converter-submit-cmx",
+            ),
             selector_steps_input=_optional(
                 "SELECTOR_STEPS_INPUT",
                 "placeholder:Enter number of steps",
@@ -168,6 +220,7 @@ class Config:
         sleep_only: bool = False,
         skip_mood: bool = False,
         skip_cards: bool = False,
+        skip_habits: bool = False,
     ) -> None:
         if self.is_home_flow():
             self._validate_home_selectors(
@@ -175,6 +228,7 @@ class Config:
                 sleep_only=sleep_only,
                 skip_mood=skip_mood,
                 skip_cards=skip_cards,
+                skip_habits=skip_habits,
             )
         else:
             self._validate_stats_selectors(steps_only=steps_only, sleep_only=sleep_only)
@@ -186,26 +240,48 @@ class Config:
         sleep_only: bool,
         skip_mood: bool,
         skip_cards: bool,
+        skip_habits: bool,
     ) -> None:
         missing = []
         if not self.selector_healthy_habits:
             missing.append("SELECTOR_HEALTHY_HABITS")
-        if not sleep_only:
+        # --steps-only skips sleep; --sleep-only skips steps
+        if not steps_only:
             if not self.selector_sleep_hours_input:
                 missing.append("SELECTOR_SLEEP_HOURS_INPUT")
             if not self.selector_sleep_minutes_input:
                 missing.append("SELECTOR_SLEEP_MINUTES_INPUT")
             if not self.selector_track_sleep:
                 missing.append("SELECTOR_TRACK_SLEEP")
-        if not steps_only:
+        if not sleep_only:
             if not self.selector_steps_input_home:
                 missing.append("SELECTOR_STEPS_INPUT_HOME")
             if not self.selector_track_steps:
                 missing.append("SELECTOR_TRACK_STEPS")
         if not skip_mood and not self.moods:
             missing.append("MOODS")
-        if not skip_cards and not self.selector_daily_card_ok:
-            missing.append("SELECTOR_DAILY_CARD_OK")
+        # Daily cards are manual via page.pause() — no OK selector required
+        if not skip_habits:
+            if not self.habit_activity:
+                missing.append("HABIT_ACTIVITY")
+            has_km = bool(self.habit_activity_km) or (
+                self.habit_activity_km_min and self.habit_activity_km_max
+            )
+            has_minutes = bool(self.habit_activity_minutes) or (
+                self.habit_activity_minutes_min and self.habit_activity_minutes_max
+            )
+            if not has_km:
+                missing.append("HABIT_ACTIVITY_KM or HABIT_ACTIVITY_KM_MIN/MAX")
+            if not has_minutes:
+                missing.append("HABIT_ACTIVITY_MINUTES or HABIT_ACTIVITY_MINUTES_MIN/MAX")
+            if not self.selector_habit_activity_combobox:
+                missing.append("SELECTOR_HABIT_ACTIVITY_COMBOBOX")
+            if not self.selector_habit_activity_km:
+                missing.append("SELECTOR_HABIT_ACTIVITY_KM")
+            if not self.selector_habit_activity_minutes:
+                missing.append("SELECTOR_HABIT_ACTIVITY_MINUTES")
+            if not self.selector_habit_activity_submit:
+                missing.append("SELECTOR_HABIT_ACTIVITY_SUBMIT")
 
         if missing:
             print(
@@ -274,6 +350,34 @@ class Config:
 
     def resolve_mood(self) -> str:
         return random.choice(self.moods)
+
+    def resolve_habit_answer(self) -> str:
+        """Yes with habit_yes_probability, else No."""
+        p = self.habit_yes_probability
+        if p < 0 or p > 1:
+            raise ValueError(f"HABIT_YES_PROBABILITY must be between 0 and 1, got {p}")
+        return "Yes" if random.random() < p else "No"
+
+    def resolve_habit_activity_km(self) -> str:
+        """Return km — random in [min, max] when both are set (1 decimal)."""
+        if self.habit_activity_km_min and self.habit_activity_km_max:
+            value = random.uniform(
+                float(self.habit_activity_km_min),
+                float(self.habit_activity_km_max),
+            )
+            return f"{value:.1f}".rstrip("0").rstrip(".")
+        return self.habit_activity_km
+
+    def resolve_habit_activity_minutes(self) -> str:
+        """Return minutes — random in [min, max] when both are set."""
+        if self.habit_activity_minutes_min and self.habit_activity_minutes_max:
+            return str(
+                random.randint(
+                    int(self.habit_activity_minutes_min),
+                    int(self.habit_activity_minutes_max),
+                )
+            )
+        return self.habit_activity_minutes
 
     def post_login_url(self) -> str:
         return self.home_page_url if self.is_home_flow() else self.stats_page_url

@@ -13,6 +13,12 @@ python log_health.py --use-auth --headed                   # daily runs
 python log_health.py --headed
 ```
 
+## Debug Run
+
+```bash
+npx playwright codegen https://app.personifyhealth.com
+```
+
 ## Reminders
 
 ```bash

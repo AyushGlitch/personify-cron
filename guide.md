@@ -25,7 +25,7 @@ Creates `auth.json` (gitignored). Re-do when session expires.
 
 ## Daily run (no 2FA)
 
-Default **home flow**: sleep (7–10h random), steps (7001–21000 random), random mood, daily cards OK if available.
+Default **home flow**: pause for manual daily cards (Playwright Inspector Resume) → sleep → steps → mood → habit check-ins + walking activity.
 
 ```bash
 cd ~/Developer/helper-apps/personify-cron
@@ -52,7 +52,8 @@ python log_health.py --use-auth --headed --flow stats
 | `--steps-only` | Steps only |
 | `--sleep-only` | Sleep only |
 | `--skip-mood` | Skip mood (home flow) |
-| `--skip-cards` | Skip daily cards (home flow) |
+| `--skip-cards` | Skip daily-cards pause (no Inspector wait) |
+| `--skip-habits` | Skip habit check-ins + activity (home flow) |
 
 ## Reminders
 
