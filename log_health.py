@@ -197,7 +197,10 @@ def open_healthy_habits(page: Page, config: Config) -> None:
         habits.click()
         page.wait_for_timeout(1500)
     except RuntimeError:
-        print("Healthy Habits section not found — may already be expanded.")
+        url = config.healthy_habits_page_url
+        print(f"Healthy Habits not found on home — navigating to {url}")
+        page.goto(url, wait_until="domcontentloaded")
+        page.wait_for_timeout(2000)
 
 
 def _healthy_habits_already_open(page: Page, config: Config) -> bool:
@@ -446,7 +449,7 @@ def submit_sleep_home(page: Page, config: Config, debug: bool) -> None:
 
 
 def submit_steps_home(page: Page, config: Config, debug: bool) -> None:
-    open_healthy_habits(page, config)
+    # open_healthy_habits(page, config)
 
     try:
         steps_input = first_matching_locator(page, config.selector_steps_input_home)
@@ -471,7 +474,7 @@ def submit_steps_home(page: Page, config: Config, debug: bool) -> None:
 
 
 def submit_mood(page: Page, config: Config, debug: bool) -> None:
-    open_healthy_habits(page, config)
+    # open_healthy_habits(page, config)
 
     mood = config.resolve_mood()
     spec = f"role:button:{mood}"
@@ -591,14 +594,15 @@ def submit_habit_checkins(page: Page, config: Config, debug: bool) -> None:
     if debug:
         screenshot(page, config.screenshot_dir, "10-habits-start")
 
-    for question in config.habit_answers:
-        answer = config.resolve_habit_answer()
-        _answer_habit_question(page, question, answer)
+    if config.habit_questions_enabled:
+        for question in config.habit_answers:
+            answer = config.resolve_habit_answer()
+            _answer_habit_question(page, question, answer)
 
-    submit_habit_activity(page, config, debug)
+        submit_habit_activity(page, config, debug)
 
-    for question, answer in config.habit_post_activity_answers:
-        _answer_habit_question(page, question, answer)
+        for question, answer in config.habit_post_activity_answers:
+            _answer_habit_question(page, question, answer)
 
     if debug:
         screenshot(page, config.screenshot_dir, "13-habits-done")

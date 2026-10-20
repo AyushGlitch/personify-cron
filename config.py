@@ -47,8 +47,10 @@ class Config:
     selector_password: str
     selector_sign_in: str
     home_page_url: str
+    healthy_habits_page_url: str
     stats_page_url: str
     selector_healthy_habits: str
+    habit_questions_enabled: bool
     selector_sleep_hours_input: str
     selector_sleep_minutes_input: str
     selector_track_sleep: str
@@ -117,14 +119,19 @@ class Config:
                 "HOME_PAGE_URL",
                 "https://app.personifyhealth.com/#/home",
             ),
+            healthy_habits_page_url=_optional(
+                "HEALTHY_HABITS_PAGE_URL",
+                "https://app.personifyhealth.com/#/healthyhabits",
+            ),
             stats_page_url=_optional(
                 "STATS_PAGE_URL",
                 "https://app.personifyhealth.com/#/stats-page",
             ),
             selector_healthy_habits=_optional(
                 "SELECTOR_HEALTHY_HABITS",
-                "label:Healthy Habits, role:link:Healthy Habits, text:Healthy Habits",
+                "role:heading:Healthy Habits, label:Healthy Habits, role:link:Healthy Habits, text:Healthy Habits",
             ),
+            habit_questions_enabled=_bool("HABIT_QUESTIONS_ENABLED", default=False),
             selector_sleep_hours_input=_optional(
                 "SELECTOR_SLEEP_HOURS_INPUT",
                 "#sleepHours, aria-label:Enter hours of sleep, formcontrolname:hours",
@@ -220,7 +227,7 @@ class Config:
         sleep_only: bool = False,
         skip_mood: bool = False,
         skip_cards: bool = False,
-        skip_habits: bool = False,
+        skip_habits: bool = True,
     ) -> None:
         if self.is_home_flow():
             self._validate_home_selectors(
